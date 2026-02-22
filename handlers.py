@@ -18,7 +18,10 @@ from aiogram.fsm.state import State, StatesGroup
 
 from config import ADMIN_ID
 from database import Database
-from utils import escape_md, render_hp_bar, render_xp_bar, get_profile_image_path, parse_time
+from utils import (
+    escape_md, render_hp_bar, render_xp_bar, 
+    get_profile_image_path, parse_time, get_task_image_path
+)
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -716,7 +719,19 @@ async def _send_reminder(bot: Bot, db: Database, user_id: int, task_id: int):
             f"⏰ *Напоминание\\!*\n\n"
             f"{em} *{tn}*: {escape_md(task['title'])}"
         )
-        await bot.send_message(user_id, text, reply_markup=reminder_buttons(task_id))
+        
+        img_path = get_task_image_path(task["task_type"])
+        if os.path.exists(img_path):
+            from aiogram.types import FSInputFile
+            await bot.send_photo(
+                user_id, 
+                photo=FSInputFile(img_path), 
+                caption=text, 
+                reply_markup=reminder_buttons(task_id)
+            )
+        else:
+            await bot.send_message(user_id, text, reply_markup=reminder_buttons(task_id))
+            
         logger.info("Reminder SENT for task=%s user=%s", task_id, user_id)
     except Exception:
         logger.exception("Reminder error task=%s user=%s", task_id, user_id)
@@ -726,7 +741,15 @@ async def _send_test_reminder(bot: Bot, user_id: int):
     """Send a test reminder to verify scheduler works."""
     logger.info("Test reminder FIRED for user=%s", user_id)
     try:
-        await bot.send_message(user_id, "✅ *Тестовое напоминание\\!*\nЕсли ты это видишь \\\u2014 шедулер работает 🎉")
+        img_path = get_task_image_path("focus") # Use focus image for test
+        text = "✅ *Тестовое напоминание\\!*\nЕсли ты это видишь \\\u2014 шедулер работает 🎉"
+        
+        if os.path.exists(img_path):
+            from aiogram.types import FSInputFile
+            await bot.send_photo(user_id, photo=FSInputFile(img_path), caption=text)
+        else:
+            await bot.send_message(user_id, text)
+            
         logger.info("Test reminder SENT to user=%s", user_id)
     except Exception:
         logger.exception("Test reminder error user=%s", user_id)

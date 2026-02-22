@@ -49,6 +49,17 @@ def get_penalty_image_path() -> str:
     return os.path.join(ASSETS_DIR, "penalty_alert.jpg")
 
 
+def get_task_image_path(task_type: str) -> str:
+    """Get reminder image path based on task type."""
+    mapping = {
+        "focus": "focus.jpg",
+        "important": "important.jpg",
+        "wish": "wish.jpg"
+    }
+    name = mapping.get(task_type, "profile_normal.jpg")
+    return os.path.join(ASSETS_DIR, name)
+
+
 # ── Time parsing (regex: 16:00, 16.00, 16 00) ─────────
 
 _TIME_RE = re.compile(r'^(\d{1,2})[\s:\.](\d{2})$')
