@@ -261,20 +261,31 @@ async def task_add_reminder(message: Message, state: FSMContext, db: Database, b
     )
     await state.clear()
 
-    # schedule reminder via APScheduler from dispatcher workflow_data
+    # schedule one-time reminder via APScheduler
     if scheduler:
         from datetime import datetime
-        from apscheduler.triggers.cron import CronTrigger
-        now = datetime.now()
-        if hour > now.hour or (hour == now.hour and minute > now.minute):
+        from zoneinfo import ZoneInfo
+        from apscheduler.triggers.date import DateTrigger
+
+        tz = ZoneInfo("Europe/Moscow")
+        now = datetime.now(tz)
+        run_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        # Only schedule if the time hasn't passed yet today
+        if run_time > now:
             scheduler.add_job(
                 _send_reminder,
-                CronTrigger(hour=hour, minute=minute),
+                DateTrigger(run_date=run_time),
                 args=[bot, db, message.from_user.id, task_id],
                 id=f"rem_{task_id}",
                 replace_existing=True,
                 misfire_grace_time=300,
             )
+            logger.info("Reminder scheduled: task=%s at %s", task_id, run_time)
+        else:
+            logger.info("Reminder time already passed for task=%s (%s), skipping schedule", task_id, rem_str)
+    else:
+        logger.warning("Scheduler not available! Reminder for task=%s will NOT fire.", task_id)
 
     em = TASK_EMOJIS.get(data["task_type"], "📌")
     tn = TASK_NAMES.get(data["task_type"], "")

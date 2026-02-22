@@ -191,6 +191,47 @@ async def _process_evening(bot: Bot, db: Database, uid: int, today: str):
         uid, done, total, total_hp_loss, total_pts_loss, new_streak,
     )
 
+# ── Restore reminders on startup ───────────────────────
+
+async def restore_reminders(bot: Bot, db: Database, scheduler: AsyncIOScheduler):
+    """Re-schedule today's pending reminders after bot restart."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from apscheduler.triggers.date import DateTrigger
+    from handlers import _send_reminder
+
+    tz = ZoneInfo("Europe/Moscow")
+    now = datetime.now(tz)
+    today = now.date().isoformat()
+    user_ids = await db.get_all_user_ids()
+    count = 0
+
+    for uid in user_ids:
+        tasks = await db.get_tasks_by_date(uid, today)
+        for t in tasks:
+            if t["completed"] or not t["reminder_time"]:
+                continue
+            try:
+                parts = t["reminder_time"].split(":")
+                hour, minute = int(parts[0]), int(parts[1])
+            except (ValueError, IndexError):
+                continue
+
+            run_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if run_time > now:
+                scheduler.add_job(
+                    _send_reminder,
+                    DateTrigger(run_date=run_time),
+                    args=[bot, db, uid, t["id"]],
+                    id=f"rem_{t['id']}",
+                    replace_existing=True,
+                    misfire_grace_time=300,
+                )
+                count += 1
+
+    logger.info("Restored %d reminder(s) for today", count)
+
+
 # ── Main ───────────────────────────────────────────────
 
 async def main():
@@ -247,6 +288,9 @@ async def main():
 
     # Store scheduler in dispatcher for handler access
     dp["scheduler"] = scheduler
+
+    # Restore today's pending reminders (survive bot restarts)
+    await restore_reminders(bot, db, scheduler)
 
     logger.info("Bot starting...")
 
