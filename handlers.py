@@ -4,7 +4,7 @@ handlers.py — All Aiogram 3.x handlers: commands, FSM, inline keyboards, callb
 
 import os
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.types import (
@@ -153,6 +153,31 @@ async def cancel_fsm_cb(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.message.answer("❌ *Действие отменено\\.*", reply_markup=main_kb(cb.from_user.id))
     await cb.answer()
+
+
+@router.message(Command("testrem"))
+async def cmd_test_reminder(message: Message, db: Database, bot: Bot):
+    """Admin-only: schedule a test reminder in 30 seconds."""
+    if message.from_user.id != ADMIN_ID:
+        return
+    if not _scheduler:
+        await message.answer("❌ *Scheduler не инициализирован\\!*")
+        return
+    try:
+        from apscheduler.triggers.date import DateTrigger
+        run_time = datetime.now() + timedelta(seconds=30)
+        _scheduler.add_job(
+            _send_test_reminder,
+            DateTrigger(run_date=run_time),
+            args=[bot, message.from_user.id],
+            id="test_reminder",
+            replace_existing=True,
+        )
+        await message.answer(f"✅ *Тестовое напоминание запланировано\\!*\nПридёт через 30 секунд\\.")
+        logger.info("Test reminder scheduled for %s", run_time)
+    except Exception as e:
+        logger.exception("Test reminder failed")
+        await message.answer(f"❌ *Ошибка:* `{escape_md(str(e))}`")
 
 # ═══════════════════ /start ═══════════════════
 
@@ -305,27 +330,29 @@ async def task_add_reminder(message: Message, state: FSMContext, db: Database, b
 
     # schedule one-time reminder via APScheduler
     if _scheduler:
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-        from apscheduler.triggers.date import DateTrigger
+        try:
+            from apscheduler.triggers.date import DateTrigger
+            import pytz
 
-        tz = ZoneInfo("Europe/Moscow")
-        now = datetime.now(tz)
-        run_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            tz = pytz.timezone("Europe/Moscow")
+            now = datetime.now(tz)
+            run_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-        # Only schedule if the time hasn't passed yet today
-        if run_time > now:
-            _scheduler.add_job(
-                _send_reminder,
-                DateTrigger(run_date=run_time),
-                args=[_bot_ref or bot, db, message.from_user.id, task_id],
-                id=f"rem_{task_id}",
-                replace_existing=True,
-                misfire_grace_time=300,
-            )
-            logger.info("Reminder scheduled: task=%s at %s", task_id, run_time)
-        else:
-            logger.info("Reminder time already passed for task=%s (%s), skipping schedule", task_id, rem_str)
+            # Only schedule if the time hasn't passed yet today
+            if run_time > now:
+                _scheduler.add_job(
+                    _send_reminder,
+                    DateTrigger(run_date=run_time),
+                    args=[_bot_ref or bot, db, message.from_user.id, task_id],
+                    id=f"rem_{task_id}",
+                    replace_existing=True,
+                    misfire_grace_time=300,
+                )
+                logger.info("Reminder scheduled: task=%s at %s", task_id, run_time)
+            else:
+                logger.info("Reminder time already passed for task=%s (%s), skipping", task_id, rem_str)
+        except Exception as e:
+            logger.exception("Failed to schedule reminder for task=%s: %s", task_id, e)
     else:
         logger.warning("Scheduler not available (_scheduler is None)! Reminder for task=%s will NOT fire.", task_id)
 
@@ -677,9 +704,11 @@ def _calc_rewards(task_type: str, pepper: int) -> tuple[int, int, int]:
 
 async def _send_reminder(bot: Bot, db: Database, user_id: int, task_id: int):
     """Called by APScheduler to send a task reminder."""
+    logger.info("_send_reminder FIRED for task=%s user=%s", task_id, user_id)
     try:
         task = await db.get_task(task_id)
         if not task or task["completed"]:
+            logger.info("Reminder skipped (completed/missing) task=%s", task_id)
             return
         em = TASK_EMOJIS.get(task["task_type"], "📌")
         tn = TASK_NAMES.get(task["task_type"], "")
@@ -688,8 +717,19 @@ async def _send_reminder(bot: Bot, db: Database, user_id: int, task_id: int):
             f"{em} *{tn}*: {escape_md(task['title'])}"
         )
         await bot.send_message(user_id, text, reply_markup=reminder_buttons(task_id))
+        logger.info("Reminder SENT for task=%s user=%s", task_id, user_id)
     except Exception:
         logger.exception("Reminder error task=%s user=%s", task_id, user_id)
+
+
+async def _send_test_reminder(bot: Bot, user_id: int):
+    """Send a test reminder to verify scheduler works."""
+    logger.info("Test reminder FIRED for user=%s", user_id)
+    try:
+        await bot.send_message(user_id, "✅ *Тестовое напоминание\\!*\nЕсли ты это видишь \\\u2014 шедулер работает 🎉")
+        logger.info("Test reminder SENT to user=%s", user_id)
+    except Exception:
+        logger.exception("Test reminder error user=%s", user_id)
 
 # ═══════════════════ Ideas ═══════════════════
 

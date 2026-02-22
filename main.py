@@ -196,11 +196,11 @@ async def _process_evening(bot: Bot, db: Database, uid: int, today: str):
 async def restore_reminders(bot: Bot, db: Database, scheduler: AsyncIOScheduler):
     """Re-schedule today's pending reminders after bot restart."""
     from datetime import datetime
-    from zoneinfo import ZoneInfo
+    import pytz
     from apscheduler.triggers.date import DateTrigger
     from handlers import _send_reminder
 
-    tz = ZoneInfo("Europe/Moscow")
+    tz = pytz.timezone("Europe/Moscow")
     now = datetime.now(tz)
     today = now.date().isoformat()
     user_ids = await db.get_all_user_ids()
