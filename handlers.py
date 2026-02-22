@@ -161,14 +161,19 @@ async def cancel_fsm_cb(cb: CallbackQuery, state: FSMContext):
 @router.message(Command("testrem"))
 async def cmd_test_reminder(message: Message, db: Database, bot: Bot):
     """Admin-only: schedule a test reminder in 30 seconds."""
+    logger.info("/testrem command received from user %s", message.from_user.id)
     if message.from_user.id != ADMIN_ID:
+        await message.answer("🚫 *У вас нет прав администратора\\!*")
         return
     if not _scheduler:
         await message.answer("❌ *Scheduler не инициализирован\\!*")
         return
     try:
         from apscheduler.triggers.date import DateTrigger
-        run_time = datetime.now() + timedelta(seconds=30)
+        import pytz
+        tz = pytz.timezone("Europe/Moscow")
+        run_time = datetime.now(tz) + timedelta(seconds=30)
+        
         _scheduler.add_job(
             _send_test_reminder,
             DateTrigger(run_date=run_time),
@@ -176,11 +181,17 @@ async def cmd_test_reminder(message: Message, db: Database, bot: Bot):
             id="test_reminder",
             replace_existing=True,
         )
-        await message.answer(f"✅ *Тестовое напоминание запланировано\\!*\nПридёт через 30 секунд\\.")
+        await message.answer(f"✅ *Тестовое напоминание запланировано\\!*\nПридёт через 30 секунд к вам \\(ID: {message.from_user.id}\\)\\.")
         logger.info("Test reminder scheduled for %s", run_time)
     except Exception as e:
-        logger.exception("Test reminder failed")
-        await message.answer(f"❌ *Ошибка:* `{escape_md(str(e))}`")
+        logger.exception("Test reminder failed to schedule")
+        await message.answer(f"❌ *Ошибка при планировании:* `{escape_md(str(e))}`")
+
+
+@router.message(Command("myid"))
+async def cmd_myid(message: Message):
+    """Simple command to show user ID."""
+    await message.answer(f"🆔 Ваш ID: `{message.from_user.id}`\nAdmin ID: `{ADMIN_ID}`")
 
 # ═══════════════════ /start ═══════════════════
 
