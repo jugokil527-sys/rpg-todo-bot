@@ -12,7 +12,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -47,6 +47,18 @@ class IdeaForm(StatesGroup):
 
 TASK_EMOJIS = {"focus": "🎯", "important": "⚡", "wish": "💫"}
 TASK_NAMES = {"focus": "Focus", "important": "Important", "wish": "Wish"}
+
+# Texts of main reply‐keyboard buttons (used to detect menu presses during FSM)
+MENU_BUTTONS = {"📋 Задачи", "🧙 Профиль", "🛒 Магазин", "🎁 Награды", "💡 Идеи", "👥 Юзеры"}
+
+
+async def _cancel_if_menu(message: Message, state: FSMContext) -> bool:
+    """If the user pressed a main-menu button while inside FSM, cancel the state."""
+    if message.text in MENU_BUTTONS:
+        await state.clear()
+        await message.answer("❌ *Действие отменено\\.*\nНажмите кнопку ещё раз\\.")
+        return True
+    return False
 
 def main_kb(user_id: int) -> ReplyKeyboardMarkup:
     rows = [
@@ -119,6 +131,24 @@ def users_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="➕ Добавить", callback_data="uadd")],
         [InlineKeyboardButton(text="➖ Удалить", callback_data="urem")],
     ])
+
+# ═══════════════════ /cancel — exit any FSM state ═══════════════════
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    cur = await state.get_state()
+    if cur is None:
+        await message.answer("🤷 *Нечего отменять\\.*")
+    else:
+        await state.clear()
+        await message.answer("❌ *Действие отменено\\.*", reply_markup=main_kb(message.from_user.id))
+
+
+@router.callback_query(F.data == "cancel_fsm")
+async def cancel_fsm_cb(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.answer("❌ *Действие отменено\\.*", reply_markup=main_kb(cb.from_user.id))
+    await cb.answer()
 
 # ═══════════════════ /start ═══════════════════
 
@@ -204,13 +234,18 @@ async def show_tasks(message: Message, db: Database):
 
 @router.callback_query(F.data == "tadd")
 async def task_add_start(cb: CallbackQuery, state: FSMContext):
-    await cb.message.answer("✏️ *Введите название задачи:*")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_fsm")]
+    ])
+    await cb.message.answer("✏️ *Введите название задачи:*", reply_markup=cancel_kb)
     await state.set_state(TaskForm.name)
     await cb.answer()
 
 
 @router.message(TaskForm.name)
 async def task_add_name(message: Message, state: FSMContext):
+    if await _cancel_if_menu(message, state):
+        return
     await state.update_data(name=message.text)
     await message.answer("🎯 *Выберите тип задачи:*", reply_markup=task_type_kb())
     await state.set_state(TaskForm.task_type)
@@ -220,7 +255,8 @@ async def task_add_name(message: Message, state: FSMContext):
 async def task_add_type(cb: CallbackQuery, state: FSMContext):
     await state.update_data(task_type=cb.data.split(":")[1])
     skip_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_rem")]
+        [InlineKeyboardButton(text="⏭️ Пропустить", callback_data="skip_rem"),
+         InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_fsm")]
     ])
     await cb.message.answer(
         "⏰ *Введите время напоминания* \\(16:00 или 16\\.00\\)\nили нажмите пропустить:",
@@ -247,6 +283,8 @@ async def task_skip_reminder(cb: CallbackQuery, state: FSMContext, db: Database)
 
 @router.message(TaskForm.reminder_time)
 async def task_add_reminder(message: Message, state: FSMContext, db: Database, bot: Bot, scheduler=None):
+    if await _cancel_if_menu(message, state):
+        return
     parsed = parse_time(message.text)
     if parsed is None:
         await message.answer("❌ *Неверный формат\\!* Пример: `14:30` или `14\\.30`")
@@ -417,20 +455,30 @@ async def show_rewards(message: Message, db: Database):
 
 @router.callback_query(F.data == "radd")
 async def reward_add_start(cb: CallbackQuery, state: FSMContext):
-    await cb.message.answer("🎁 *Введите название награды:*")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_fsm")]
+    ])
+    await cb.message.answer("🎁 *Введите название награды:*", reply_markup=cancel_kb)
     await state.set_state(RewardForm.name)
     await cb.answer()
 
 
 @router.message(RewardForm.name)
 async def reward_add_name(msg: Message, state: FSMContext):
+    if await _cancel_if_menu(msg, state):
+        return
     await state.update_data(name=msg.text)
-    await msg.answer("💰 *Введите стоимость в очках:*")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_fsm")]
+    ])
+    await msg.answer("💰 *Введите стоимость в очках:*", reply_markup=cancel_kb)
     await state.set_state(RewardForm.cost)
 
 
 @router.message(RewardForm.cost)
 async def reward_add_cost(msg: Message, state: FSMContext, db: Database):
+    if await _cancel_if_menu(msg, state):
+        return
     try:
         cost = int(msg.text)
         if cost <= 0:
@@ -543,7 +591,10 @@ async def users_add_start(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id != ADMIN_ID:
         await cb.answer("❌ Нет доступа!")
         return
-    await cb.message.answer("👤 *Введите ID пользователя:*")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_fsm")]
+    ])
+    await cb.message.answer("👤 *Введите ID пользователя:*", reply_markup=cancel_kb)
     await state.set_state(AddUserForm.user_id)
     await cb.answer()
 
@@ -552,6 +603,8 @@ async def users_add_start(cb: CallbackQuery, state: FSMContext):
 async def users_add_id(msg: Message, state: FSMContext, db: Database):
     if msg.from_user.id != ADMIN_ID:
         await state.clear()
+        return
+    if await _cancel_if_menu(msg, state):
         return
     try:
         uid = int(msg.text.strip())
@@ -660,13 +713,18 @@ async def show_ideas_menu(message: Message, db: Database):
 
 @router.callback_query(F.data == "icatadd")
 async def cat_add_start(cb: CallbackQuery, state: FSMContext):
-    await cb.message.answer("📂 *Введите название категории:*")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_fsm")]
+    ])
+    await cb.message.answer("📂 *Введите название категории:*", reply_markup=cancel_kb)
     await state.set_state(CategoryForm.name)
     await cb.answer()
 
 
 @router.message(CategoryForm.name)
 async def cat_add_name(msg: Message, state: FSMContext, db: Database):
+    if await _cancel_if_menu(msg, state):
+        return
     name = msg.text.strip()
     if not name:
         await msg.answer("❌ *Название не может быть пустым\\!*")
@@ -748,13 +806,18 @@ async def ideas_back(cb: CallbackQuery, db: Database):
 async def idea_add_start(cb: CallbackQuery, state: FSMContext):
     cat_id = int(cb.data.split(":")[1])
     await state.update_data(cat_id=cat_id)
-    await cb.message.answer("✏️ *Введите тему идеи:*")
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_fsm")]
+    ])
+    await cb.message.answer("✏️ *Введите тему идеи:*", reply_markup=cancel_kb)
     await state.set_state(IdeaForm.title)
     await cb.answer()
 
 
 @router.message(IdeaForm.title)
 async def idea_add_title(msg: Message, state: FSMContext, db: Database):
+    if await _cancel_if_menu(msg, state):
+        return
     data = await state.get_data()
     cat_id = data["cat_id"]
     title = msg.text.strip()
