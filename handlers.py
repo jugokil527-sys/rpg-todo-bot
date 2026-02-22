@@ -23,6 +23,10 @@ from utils import escape_md, render_hp_bar, render_xp_bar, get_profile_image_pat
 logger = logging.getLogger(__name__)
 router = Router()
 
+# Set by main.py at startup — reliable alternative to Aiogram DI
+_scheduler = None
+_bot_ref = None
+
 # ═══════════════════ FSM States ═══════════════════
 
 class TaskForm(StatesGroup):
@@ -282,7 +286,7 @@ async def task_skip_reminder(cb: CallbackQuery, state: FSMContext, db: Database)
 
 
 @router.message(TaskForm.reminder_time)
-async def task_add_reminder(message: Message, state: FSMContext, db: Database, bot: Bot, scheduler=None):
+async def task_add_reminder(message: Message, state: FSMContext, db: Database, bot: Bot):
     if await _cancel_if_menu(message, state):
         return
     parsed = parse_time(message.text)
@@ -300,7 +304,7 @@ async def task_add_reminder(message: Message, state: FSMContext, db: Database, b
     await state.clear()
 
     # schedule one-time reminder via APScheduler
-    if scheduler:
+    if _scheduler:
         from datetime import datetime
         from zoneinfo import ZoneInfo
         from apscheduler.triggers.date import DateTrigger
@@ -311,10 +315,10 @@ async def task_add_reminder(message: Message, state: FSMContext, db: Database, b
 
         # Only schedule if the time hasn't passed yet today
         if run_time > now:
-            scheduler.add_job(
+            _scheduler.add_job(
                 _send_reminder,
                 DateTrigger(run_date=run_time),
-                args=[bot, db, message.from_user.id, task_id],
+                args=[_bot_ref or bot, db, message.from_user.id, task_id],
                 id=f"rem_{task_id}",
                 replace_existing=True,
                 misfire_grace_time=300,
@@ -323,7 +327,7 @@ async def task_add_reminder(message: Message, state: FSMContext, db: Database, b
         else:
             logger.info("Reminder time already passed for task=%s (%s), skipping schedule", task_id, rem_str)
     else:
-        logger.warning("Scheduler not available! Reminder for task=%s will NOT fire.", task_id)
+        logger.warning("Scheduler not available (_scheduler is None)! Reminder for task=%s will NOT fire.", task_id)
 
     em = TASK_EMOJIS.get(data["task_type"], "📌")
     tn = TASK_NAMES.get(data["task_type"], "")

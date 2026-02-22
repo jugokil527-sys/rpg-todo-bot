@@ -286,7 +286,13 @@ async def main():
 
     scheduler.start()
 
-    # Store scheduler in dispatcher for handler access
+    # Store scheduler directly in handlers module (reliable, no DI issues)
+    import handlers as _handlers_mod
+    _handlers_mod._scheduler = scheduler
+    _handlers_mod._bot_ref = bot
+    logger.info("Scheduler injected into handlers module: %s", scheduler)
+
+    # Also keep in dp for any other use
     dp["scheduler"] = scheduler
 
     # Restore today's pending reminders (survive bot restarts)
